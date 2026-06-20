@@ -9,6 +9,8 @@ from scoring import (
     calculate_theta_score,
     calculate_vega_score,
     calculate_spread_score,
+    calculate_oi_score,
+    calculate_liquidity_score,
     calculate_composite_score,
     color_from_score,
     recommendation_from_score,
@@ -142,27 +144,60 @@ class TestVegaScore:
 
 class TestSpreadScore:
     def test_tight_spread(self):
-        score = calculate_spread_score(bid=347.0, ask=353.0)  # spread ~1.7%
+        score = calculate_spread_score(bid=347.0, ask=353.0)
         assert score == pytest.approx(100.0 - 1.7*5, abs=1.0)
 
     def test_5pct_spread(self):
-        score = calculate_spread_score(bid=332.5, ask=367.5)  # spread = 35/350 = 10%
+        score = calculate_spread_score(bid=332.5, ask=367.5)
         assert score == pytest.approx(50.0, abs=1.0)
 
     def test_10pct_spread(self):
-        score = calculate_spread_score(bid=315.0, ask=385.0)  # spread = 70/350 = 20%
+        score = calculate_spread_score(bid=315.0, ask=385.0)
         assert score == pytest.approx(0.0, abs=1.0)
 
     def test_wide_spread_floor(self):
-        score = calculate_spread_score(bid=100, ask=500)  # spread >> 20%
+        score = calculate_spread_score(bid=100, ask=500)
         assert score == pytest.approx(0.0)
 
     def test_zero_bid(self):
         assert calculate_spread_score(bid=0, ask=350) == pytest.approx(0.0)
 
     def test_negative_spread_guard(self):
-        score = calculate_spread_score(bid=360, ask=340)  # bid > ask
+        score = calculate_spread_score(bid=360, ask=340)
         assert score == pytest.approx(0.0)
+
+
+class TestOIScore:
+    def test_zero_oi(self):
+        assert calculate_oi_score(0) == pytest.approx(0.0)
+
+    def test_high_oi(self):
+        s = calculate_oi_score(1000)
+        assert s > 70  # log10(1001)/4*100 ≈ 75
+
+    def test_low_oi(self):
+        s = calculate_oi_score(10)
+        assert 25 < s < 40  # log10(11)/4*100 ≈ 26
+
+    def test_negative_oi(self):
+        assert calculate_oi_score(-5) == pytest.approx(0.0)
+
+
+class TestLiquidityScore:
+    def test_perfect(self):
+        # Tight spread (100) + high OI (100) → 100
+        score = calculate_liquidity_score(bid=347, ask=353, open_interest=1000)
+        assert score > 80
+
+    def test_wide_spread_no_oi(self):
+        # Wide spread (0) + no OI (0) → 0
+        score = calculate_liquidity_score(bid=100, ask=500, open_interest=0)
+        assert score < 10
+
+    def test_good_spread_low_oi(self):
+        # Tight spread rescues low OI somewhat
+        score = calculate_liquidity_score(bid=347, ask=353, open_interest=5)
+        assert 60 < score < 85  # spread≈100*0.7 + oi≈20*0.3 ≈ 76
 
 
 class TestCompositeScore:
@@ -170,26 +205,26 @@ class TestCompositeScore:
         result = calculate_composite_score(
             delta=0.50, iv_percentile=20, option_type='CALL',
             strike=20000, premium=350, theta=5.0, vega=30.0,
-            bid=347, ask=353, days_to_expiry=30,
+            bid=347, ask=353, days_to_expiry=30, open_interest=500,
         )
-        assert result.composite > 50  # Should be decent: ATM, low IV, tight spread
+        assert result.composite > 50
         assert result.color in ("green", "yellow")
 
     def test_bad_option_low_score(self):
         result = calculate_composite_score(
             delta=0.05, iv_percentile=90, option_type='CALL',
             strike=22000, premium=10, theta=2.0, vega=5.0,
-            bid=8, ask=12, days_to_expiry=3,
+            bid=8, ask=12, days_to_expiry=3, open_interest=2,
         )
-        assert result.composite < 50  # Deep OTM, expensive IV, wide spread
+        assert result.composite < 50
         assert result.color == "red"
 
     def test_weight_error_returns_zero(self):
-        bad_weights = ScoreWeights(p_weight=0.50)  # sums to 0.65
+        bad_weights = ScoreWeights(p_weight=0.50)
         result = calculate_composite_score(
             delta=0.50, iv_percentile=50, option_type='CALL',
             strike=20000, premium=350, theta=5.0, vega=30.0,
-            bid=347, ask=353, days_to_expiry=30,
+            bid=347, ask=353, days_to_expiry=30, open_interest=100,
             weights=bad_weights,
         )
         assert result.composite == 0
@@ -199,7 +234,7 @@ class TestCompositeScore:
         result = calculate_composite_score(
             delta=0.50, iv_percentile=50, option_type='CALL',
             strike=20000, premium=350, theta=5.0, vega=30.0,
-            bid=347, ask=353, days_to_expiry=30,
+            bid=347, ask=353, days_to_expiry=30, open_interest=100,
         )
         d = result.to_dict()
         for key in ("p_score", "iv_score", "rr_score", "theta_score",

@@ -130,6 +130,7 @@ def load_full_option_chain(expiry_date: str) -> list:
             "ask_price": ask,
             "last_price": last,
             "volume": int(snap.get('volume', 0)),
+            "open_interest": int(snap.get('open_interest', 0)),
         })
     return options
 
@@ -168,9 +169,11 @@ def score_option(opt: dict, spot: float, historical_closes: list,
         premium=premium, theta=g["theta"], vega=g["vega"],
         bid=bid, ask=ask, days_to_expiry=analysis["days_to_expiry"],
         weights=weights, max_profit_multiplier=max_profit_mult,
+        open_interest=opt.get("open_interest", 0),
     )
 
     spread_pct = (ask - bid) / ((bid + ask) / 2) * 100 if (bid + ask) > 0 else 0
+    pop = abs(g["delta"]) * 100  # Delta ≈ probability of profit for long options
     return {
         "strike": opt["strike_price"],
         "type": opt["option_type"],
@@ -183,9 +186,11 @@ def score_option(opt: dict, spot: float, historical_closes: list,
         "vega": g["vega"],
         "iv_pct": analysis["iv"] * 100,
         "iv_vs_rv": analysis["iv_percentile"],
+        "pop": pop,
         "score": score.composite,
         "color": score.color,
         "volume": opt["volume"],
+        "open_interest": opt.get("open_interest", 0),
         "premium_hkd": premium * mult,
         "cost_hkd": ask * mult,
         "spread_cost_hkd": (ask - (bid + ask) / 2) * mult,
@@ -414,15 +419,17 @@ with tab2:
             "ask": "Ask",
             "spread_pct": "价差%",
             "delta": "Delta",
+            "pop": "POP%",
             "iv_pct": "IV%",
             "iv_vs_rv": "IV分位",
             "score": "值博率",
             "volume": "成交量",
+            "open_interest": "OI",
             "cost_hkd": "买入成本",
         }
         df_display = df_filtered[list(display_cols.keys())].rename(columns=display_cols)
         df_display = df_display.round({
-            "Bid": 0, "Ask": 0, "价差%": 1, "Delta": 3,
+            "Bid": 0, "Ask": 0, "价差%": 1, "Delta": 3, "POP%": 0,
             "IV%": 1, "IV分位": 0, "值博率": 0, "买入成本": 0,
         })
 

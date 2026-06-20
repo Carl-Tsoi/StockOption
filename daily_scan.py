@@ -99,6 +99,7 @@ def scan_expiry(ctx, spot, closes, expiry, r, q, mult, weights, max_profit_mult)
         ask = float(snap.get('ask_price', 0))
         last = float(snap.get('last_price', 0))
         vol = int(snap.get('volume', 0))
+        oi = int(snap.get('open_interest', 0))
 
         if last <= 0 and bid <= 0 and ask <= 0:
             continue  # No market data at all
@@ -133,6 +134,7 @@ def scan_expiry(ctx, spot, closes, expiry, r, q, mult, weights, max_profit_mult)
             theta=g["theta"], vega=g["vega"],
             bid=bid, ask=ask, days_to_expiry=analysis["days_to_expiry"],
             weights=weights, max_profit_multiplier=max_profit_mult,
+            open_interest=oi,
         )
 
         spread_pct = (ask - bid) / ((bid + ask) / 2) * 100 if (bid + ask) > 0 else 0
@@ -151,6 +153,7 @@ def scan_expiry(ctx, spot, closes, expiry, r, q, mult, weights, max_profit_mult)
             "ask": ask,
             "premium": last,
             "volume": vol,
+            "open_interest": oi,
             "cost_hkd": ask * mult,
         })
 

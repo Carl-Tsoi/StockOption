@@ -171,9 +171,29 @@ def calculate_spread_score(bid: float, ask: float) -> float:
     spread_pct = (ask - bid) / mid * 100.0
     if spread_pct < 0:
         return 0.0
-    # Scale: 5% → 25pt penalty, 10% → 50pt, 20% → 100pt (floor 0)
     score = 100.0 - min(100.0, spread_pct * 5.0)
     return max(0.0, score)
+
+
+def calculate_oi_score(open_interest: int) -> float:
+    """Open Interest liquidity score. Higher OI = deeper market = easier exit.
+    Uses log scale: OI=10→30, OI=100→60, OI=1000→100.
+    Blended with spread_score to form the final Liquidity score.
+    """
+    if open_interest <= 0:
+        return 0.0
+    import math
+    score = math.log10(open_interest + 1) / 4.0 * 100.0  # log10(10001)≈4.0
+    return max(0.0, min(100.0, score))
+
+
+def calculate_liquidity_score(bid: float, ask: float, open_interest: int = 0) -> float:
+    """Combined liquidity score: 70% bid-ask spread + 30% open interest.
+    Follows Options Arena methodology.
+    """
+    spread = calculate_spread_score(bid, ask)
+    oi = calculate_oi_score(open_interest)
+    return spread * 0.7 + oi * 0.3
 
 
 # ---------------------------------------------------------------------------
@@ -231,27 +251,25 @@ def calculate_composite_score(
     days_to_expiry: float,
     weights: Optional[ScoreWeights] = None,
     max_profit_multiplier: float = 5.0,
+    open_interest: int = 0,
 ) -> ScoreResult:
     """Calculate the composite 值博率 score (0-100).
 
-    Returns a ScoreResult with all component scores, composite, color, and
-    Chinese recommendation string.
-
     All inputs should be in consistent units:
     - delta: absolute (0 to 1)
-    - iv_percentile: 0-100 (percentile vs historical realized vol)
+    - iv_percentile: 0-100
     - strike, premium: index points
     - theta: daily index points
     - vega: index points per 1% IV change
     - bid, ask: index points
     - days_to_expiry: float
+    - open_interest: int (used in liquidity scoring)
     """
     if weights is None:
         weights = ScoreWeights()
 
     err = weights.validate()
     if err:
-        # Return a zero-score result with error indication
         return ScoreResult(
             p_score=0, iv_score=0, rr_score=0,
             theta_score=0, vega_score=0, spread_score=0,
@@ -264,7 +282,7 @@ def calculate_composite_score(
     rr_score = calculate_rr_score(option_type, strike, premium, max_profit_multiplier)
     theta_score = calculate_theta_score(theta, premium)
     vega_score = calculate_vega_score(vega, premium)
-    spread_score = calculate_spread_score(bid, ask)
+    liquidity_score = calculate_liquidity_score(bid, ask, open_interest)
 
     composite = (
         weights.p_weight * p_score
@@ -272,7 +290,7 @@ def calculate_composite_score(
         + weights.rr_weight * rr_score
         + weights.theta_weight * theta_score
         + weights.vega_weight * vega_score
-        + weights.spread_weight * spread_score
+        + weights.spread_weight * liquidity_score
     )
 
     mid = (bid + ask) / 2.0
@@ -288,7 +306,7 @@ def calculate_composite_score(
         rr_score=rr_score,
         theta_score=theta_score,
         vega_score=vega_score,
-        spread_score=spread_score,
+        spread_score=liquidity_score,
         composite=composite,
         color=color,
         recommendation=recommendation,
