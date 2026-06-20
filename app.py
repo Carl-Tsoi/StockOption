@@ -258,178 +258,96 @@ tab_long, tab_short, tab_log = st.tabs(["📈 Long 分析", "📉 Short 分析",
 # TAB: Long 分析
 # ===========================================================================
 with tab_long:
-    long_mode = st.radio("模式", ["单合约评估", "全链扫描"], horizontal=True)
-
-    if long_mode == "单合约":
-        st.header("选择期权合约")
+    st.header("📋 Long 全链扫描")
 
     if not expiry_dates:
         st.error("无可用到期日")
         st.stop()
 
-    col1, col2 = st.columns(2)
-    with col1:
-        option_type = st.radio("期权类型", ["CALL", "PUT"], horizontal=True)
-    with col2:
-        selected_expiry = st.selectbox("到期月", expiry_dates, key="tab1_expiry")
+    scan_expiry = st.selectbox("到期月", expiry_dates, key="tab2_expiry")
+    scan_type = st.radio("期权类型", ["ALL", "CALL", "PUT"], horizontal=True, key="scan_type")
 
-    options_list = load_full_option_chain(selected_expiry)
-    filtered = [o for o in options_list if o["option_type"].upper() == option_type]
-    if not filtered:
-        st.warning(f"{selected_expiry} 无 {option_type} 期权")
-        st.stop()
+    if st.button("🔍 扫描全链", type="primary", use_container_width=True):
+        all_options = load_full_option_chain(scan_expiry)
+        if scan_type != "ALL":
+            all_options = [o for o in all_options if o["option_type"].upper() == scan_type]
 
-    strikes = sorted(set(o["strike_price"] for o in filtered))
-    col_a, col_b = st.columns(2)
-    with col_a:
-        strike = st.selectbox("行权价", strikes)
-    with col_b:
-        selected = next((o for o in filtered if o["strike_price"] == strike), None)
-        if selected:
-            prem = selected["last_price"]
-            bid = selected["bid_price"] if selected["bid_price"] > 0 else prem * 0.95
-            ask = selected["ask_price"] if selected["ask_price"] > 0 else prem * 1.05
-            premium = st.number_input("权利金（市价）", value=prem, step=1.0)
-            st.caption(f"Bid: {bid:.1f} | Ask: {ask:.1f} | 成交量: {selected['volume']}")
+        if not all_options:
+            st.warning(f"无匹配期权 (到期月={scan_expiry}, 类型={scan_type})")
+            st.stop()
 
-    if st.button("🔍 评估值博率", type="primary", use_container_width=True):
-        try:
-            expiry_date = datetime.strptime(selected_expiry, '%Y-%m-%d').date()
-        except ValueError:
-            st.error("到期日格式错误"); st.stop()
+        st.info(f"正在分析 {len(all_options)} 张期权...")
+        progress = st.progress(0)
+        results = []
 
-        with st.spinner("计算中..."):
-            result = score_option(
-                selected, hsi_spot, historical_closes, r, q, mult,
+        for i, opt in enumerate(all_options):
+            rv = score_option(
+                opt, hsi_spot, historical_closes, r, q, mult,
                 weights, float(max_profit_mult),
             )
+            if rv:
+                results.append(rv)
+            progress.progress((i + 1) / len(all_options))
 
-        if result is None:
-            st.error("计算失败——数据可能不完整")
+        progress.empty()
+
+        if not results:
+            st.error("所有期权计算失败")
             st.stop()
+
+        df = pd.DataFrame(results)
+        df = df.sort_values("score", ascending=False)
+        green_count = len(df[df["color"] == "green"])
+        yellow_count = len(df[df["color"] == "yellow"])
+        red_count = len(df[df["color"] == "red"])
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1: st.metric("分析合约数", len(df))
+        with col2: st.metric("🟢 值博率高 (≥80)", green_count)
+        with col3: st.metric("🟡 一般 (50-79)", yellow_count)
+        with col4: st.metric("🔴 低 (<50)", red_count)
 
         st.divider()
-        color_map = {"green": "#00C853", "yellow": "#FFD600", "red": "#FF1744"}
-        hero_color = color_map.get(result["color"], "#999")
 
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            st.markdown(f"""
-            <div style="text-align:center; padding:20px; border:3px solid {hero_color}; border-radius:16px;">
-                <div style="font-size:4em; font-weight:bold; color:{hero_color};">{result['score']:.0f}</div>
-                <div style="color:#888;">值博率 / 100</div>
-            </div>""", unsafe_allow_html=True)
-        with c2:
-            score = result["score"]
-            if score >= 80: rec = "值博率高，可考虑买入"
-            elif score >= 50: rec = "值博率一般，谨慎"
-            else: rec = "值博率低，不建议买入"
-            st.markdown(f"### {rec}")
-            st.markdown(f"IV: {result['iv_pct']:.1f}% | IV vs RV: {result['iv_vs_rv']:.0f}% | 价差: {result['spread_pct']:.1f}%")
+        filt_col1, filt_col2 = st.columns(2)
+        with filt_col1:
+            min_score = st.slider("最低值博率", 0, 100, 0)
+        with filt_col2:
+            max_spread = st.slider("最大买卖价差 %", 0, 200, 200)
 
-        st.subheader("📐 Greeks")
-        gcols = st.columns(5)
-        for i, (n, v) in enumerate([("Delta","delta"),("Gamma","gamma"),("Theta","theta"),("Vega","vega"),("Rho","delta")]):
-            with gcols[i]: st.metric(n, f"{result.get(v, 0):.4f}" if n != "Rho" else f"{result.get('delta', 0)*0.05:.4f}")
+        df_filtered = df[(df["score"] >= min_score) & (df["spread_pct"] <= max_spread)]
 
-        st.subheader("💰 成本")
-        c1, c2, c3 = st.columns(3)
-        with c1: st.metric("权利金 × 乘数", f"HK${result['premium_hkd']:,.0f}")
-        with c2: st.metric("按 Ask 买入", f"HK${result['cost_hkd']:,.0f}")
-        with c3: st.metric("价差成本", f"HK${result['spread_cost_hkd']:,.0f}")
+        display_cols = {
+            "type": "Type", "strike": "Strike", "bid": "Bid", "ask": "Ask",
+            "delta": "Delta", "pop": "Prob.ITM", "iv_pct": "IV",
+            "iv_vs_rv": "IV分位", "spread_pct": "Spread",
+            "volume": "Volume", "open_interest": "Open Interest",
+            "cost_hkd": "成本(HKD)", "score": "值博率",
+        }
+        df_display = df_filtered[list(display_cols.keys())].rename(columns=display_cols)
+        df_display = df_display.round({
+            "Bid": 0, "Ask": 0, "Delta": 3, "Prob.ITM": 0,
+            "IV": 1, "IV分位": 0, "Spread": 1, "成本(HKD)": 0, "值博率": 0,
+        })
 
-
-    else:  # long_mode == "全链扫描"
-        st.header("📋 Long 全链扫描")
-
-        if not expiry_dates:
-            st.error("无可用到期日")
-            st.stop()
-
-        scan_expiry = st.selectbox("到期月", expiry_dates, key="tab2_expiry")
-        scan_type = st.radio("期权类型", ["ALL", "CALL", "PUT"], horizontal=True, key="scan_type")
-
-        if st.button("🔍 扫描全链", type="primary", use_container_width=True):
-            all_options = load_full_option_chain(scan_expiry)
-            if scan_type != "ALL":
-                all_options = [o for o in all_options if o["option_type"].upper() == scan_type]
-
-            if not all_options:
-                st.warning(f"无匹配期权 (到期月={scan_expiry}, 类型={scan_type})")
-                st.stop()
-
-            st.info(f"正在分析 {len(all_options)} 张期权...")
-            progress = st.progress(0)
-            results = []
-
-            for i, opt in enumerate(all_options):
-                rv = score_option(
-                    opt, hsi_spot, historical_closes, r, q, mult,
-                    weights, float(max_profit_mult),
-                )
-                if rv:
-                    results.append(rv)
-                progress.progress((i + 1) / len(all_options))
-
-            progress.empty()
-
-            if not results:
-                st.error("所有期权计算失败")
-                st.stop()
-
-            df = pd.DataFrame(results)
-            df = df.sort_values("score", ascending=False)
-            green_count = len(df[df["color"] == "green"])
-            yellow_count = len(df[df["color"] == "yellow"])
-            red_count = len(df[df["color"] == "red"])
-
-            col1, col2, col3, col4 = st.columns(4)
-            with col1: st.metric("分析合约数", len(df))
-            with col2: st.metric("🟢 值博率高 (≥80)", green_count)
-            with col3: st.metric("🟡 一般 (50-79)", yellow_count)
-            with col4: st.metric("🔴 低 (<50)", red_count)
-
-            st.divider()
-
-            filt_col1, filt_col2 = st.columns(2)
-            with filt_col1:
-                min_score = st.slider("最低值博率", 0, 100, 0)
-            with filt_col2:
-                max_spread = st.slider("最大买卖价差 %", 0, 200, 200)
-
-            df_filtered = df[(df["score"] >= min_score) & (df["spread_pct"] <= max_spread)]
-
-            display_cols = {
-                "type": "Type", "strike": "Strike", "bid": "Bid", "ask": "Ask",
-                "delta": "Delta", "pop": "Prob.ITM", "iv_pct": "IV",
-                "iv_vs_rv": "IV分位", "spread_pct": "Spread",
-                "volume": "Volume", "open_interest": "Open Interest",
-                "cost_hkd": "成本(HKD)", "score": "值博率",
-            }
-            df_display = df_filtered[list(display_cols.keys())].rename(columns=display_cols)
-            df_display = df_display.round({
-                "Bid": 0, "Ask": 0, "Delta": 3, "Prob.ITM": 0,
-                "IV": 1, "IV分位": 0, "Spread": 1, "成本(HKD)": 0, "值博率": 0,
+        st.dataframe(df_display, use_container_width=True, height=600, hide_index=True,
+            column_config={
+                "值博率": st.column_config.NumberColumn(format="%d"),
+                "Spread": st.column_config.NumberColumn(format="%.0f%%"),
+                "IV": st.column_config.NumberColumn(format="%.1f%%"),
+                "Prob.ITM": st.column_config.NumberColumn(format="%.0f%%"),
+                "Delta": st.column_config.NumberColumn(format="%.3f"),
+                "成本(HKD)": st.column_config.NumberColumn(format="HK$%.0f"),
             })
 
-            st.dataframe(df_display, use_container_width=True, height=600, hide_index=True,
-                column_config={
-                    "值博率": st.column_config.NumberColumn(format="%d"),
-                    "Spread": st.column_config.NumberColumn(format="%.0f%%"),
-                    "IV": st.column_config.NumberColumn(format="%.1f%%"),
-                    "Prob.ITM": st.column_config.NumberColumn(format="%.0f%%"),
-                    "Delta": st.column_config.NumberColumn(format="%.3f"),
-                    "成本(HKD)": st.column_config.NumberColumn(format="HK$%.0f"),
-                })
+        st.caption(f"显示 {len(df_filtered)} / {len(df)} 张合约（最低值博率 {min_score}，最大价差 {max_spread}%）")
 
-            st.caption(f"显示 {len(df_filtered)} / {len(df)} 张合约（最低值博率 {min_score}，最大价差 {max_spread}%）")
-
-            if green_count > 0:
-                best = df[df["color"] == "green"].iloc[0]
-                st.success(f"🏆 最高值博率: {best['type']} {best['strike']:.0f} → 评分 {best['score']:.0f}/100 | IV {best['iv_pct']:.1f}% | 价差 {best['spread_pct']:.1f}% | 成本 HK${best['cost_hkd']:,.0f}")
-            elif yellow_count > 0:
-                best = df.iloc[0]
-                st.info(f"📊 最优选择: {best['type']} {best['strike']:.0f} → 评分 {best['score']:.0f}/100 (无绿色合约)")
+        if green_count > 0:
+            best = df[df["color"] == "green"].iloc[0]
+            st.success(f"🏆 最高值博率: {best['type']} {best['strike']:.0f} → 评分 {best['score']:.0f}/100 | IV {best['iv_pct']:.1f}% | 价差 {best['spread_pct']:.1f}% | 成本 HK${best['cost_hkd']:,.0f}")
+        elif yellow_count > 0:
+            best = df.iloc[0]
+            st.info(f"📊 最优选择: {best['type']} {best['strike']:.0f} → 评分 {best['score']:.0f}/100 (无绿色合约)")
 
 
 # ===========================================================================
