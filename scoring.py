@@ -70,14 +70,32 @@ class ScoreResult:
 # ---------------------------------------------------------------------------
 
 def calculate_p_score(delta: float) -> float:
-    """Directional probability score from absolute delta.
-    ATM (delta≈0.50) → 100. Deep OTM (delta≈0.05) → 10.
-    Uses Black-Scholes delta as a rough ITM-probability proxy.
-    Note: Delta diverges from true prob for tail-risk options; this is
-    a practical approximation, not a theoretical claim.
+    """Delta efficiency score — rewards options in the 0.30-0.60 sweet spot.
+
+    Why not just use |delta| * 200 (old formula)?
+    - Deep ITM (|delta| > 0.80): you're paying time premium for what is
+      essentially a futures position. Better to short/long futures directly.
+    - Deep OTM (|delta| < 0.10): you're buying a lottery ticket. Minimal
+      directional exposure per unit of premium.
+
+    The option's unique value — nonlinear payoff with limited downside —
+    is best expressed in the 0.30-0.60 delta range.
+
+    Score curve:
+      |Δ| ≤ 0.30: ramp up 0→100 (building directional exposure)
+      0.30 ≤ |Δ| ≤ 0.60: flat 100 (optimal zone — most leverage per premium)
+      0.60 < |Δ| ≤ 0.95: ramp down 100→20 (becoming a futures substitute)
+      |Δ| > 0.95: floor 20 (almost pure delta, no optionality value)
     """
     abs_delta = abs(delta)
-    score = abs_delta * 200  # 0.50 → 100, 0.05 → 10
+    if abs_delta <= 0.30:
+        score = abs_delta / 0.30 * 100.0  # 0→100
+    elif abs_delta <= 0.60:
+        score = 100.0  # optimal plateau
+    elif abs_delta <= 0.95:
+        score = 100.0 - (abs_delta - 0.60) / 0.35 * 80.0  # 100→20
+    else:
+        score = 20.0  # floor
     return max(0.0, min(100.0, score))
 
 

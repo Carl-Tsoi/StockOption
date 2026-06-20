@@ -16,28 +16,45 @@ from scoring import (
 
 
 class TestPScore:
-    def test_atm(self):
+    # New formula: plateau 0.30-0.60 = 100, ramps down at extremes
+
+    def test_optimal_zone_30(self):
+        assert calculate_p_score(0.30) == pytest.approx(100.0)
+
+    def test_optimal_zone_50(self):
         assert calculate_p_score(0.50) == pytest.approx(100.0)
 
+    def test_optimal_zone_60(self):
+        assert calculate_p_score(0.60) == pytest.approx(100.0)
+
     def test_deep_otm(self):
-        assert calculate_p_score(0.05) == pytest.approx(10.0)
+        # 0.05/0.30*100 = 16.7
+        assert calculate_p_score(0.05) == pytest.approx(16.67, abs=0.1)
 
-    def test_deep_itm_call(self):
-        # abs(0.95)*200=190 → clamped to 100. Deep ITM = high directional certainty.
-        assert calculate_p_score(0.95) == pytest.approx(100.0)
+    def test_deep_itm_penalized(self):
+        # 100 - (0.95-0.60)/0.35*80 = 100-80 = 20
+        assert calculate_p_score(0.95) == pytest.approx(20.0)
 
-    def test_deep_itm_put(self):
-        # abs(-0.95)*200=190 → clamped to 100
-        assert calculate_p_score(-0.95) == pytest.approx(100.0)
+    def test_deep_itm_put_penalized(self):
+        assert calculate_p_score(-0.95) == pytest.approx(20.0)
+
+    def test_moderate_itm(self):
+        # 100 - (0.81-0.60)/0.35*80 = 100-48 = 52
+        assert calculate_p_score(-0.81) == pytest.approx(52.0, abs=0.1)
+
+    def test_ramp_up(self):
+        # 0.15/0.30*100 = 50
+        assert calculate_p_score(0.15) == pytest.approx(50.0)
 
     def test_delta_zero(self):
         assert calculate_p_score(0.0) == pytest.approx(0.0)
 
-    def test_delta_above_one_clamped(self):
-        assert calculate_p_score(1.5) == pytest.approx(100.0)
+    def test_delta_above_one_floor(self):
+        assert calculate_p_score(1.5) == pytest.approx(20.0)
 
-    def test_negative_delta_clamped(self):
-        assert calculate_p_score(-0.03) == pytest.approx(6.0)
+    def test_negative_delta_ramp(self):
+        # 0.03/0.30*100 = 10
+        assert calculate_p_score(-0.03) == pytest.approx(10.0)
 
 
 class TestIVScore:
