@@ -1,0 +1,15 @@
+# Python
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Data files (generated at runtime)
+hsi_history_cache.json
+trade_log.csv
+
+# GStack (vendored skills)
+gstack/
+
+# OS
+.DS_Store
