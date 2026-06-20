@@ -252,13 +252,16 @@ if not weights_ok:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab1, tab2, tab3 = st.tabs(["🔍 单合约评估", "📋 全链扫描", "📝 交易日志"])
+tab_long, tab_short, tab_log = st.tabs(["📈 Long 分析", "📉 Short 分析", "📝 交易日志"])
 
 # ===========================================================================
-# TAB 1: Single contract evaluator
+# TAB: Long 分析
 # ===========================================================================
-with tab1:
-    st.header("选择期权合约")
+with tab_long:
+    long_mode = st.radio("模式", ["单合约评估", "全链扫描"], horizontal=True)
+
+    if long_mode == "单合约":
+        st.header("选择期权合约")
 
     if not expiry_dates:
         st.error("无可用到期日")
@@ -336,137 +339,302 @@ with tab1:
         with c3: st.metric("价差成本", f"HK${result['spread_cost_hkd']:,.0f}")
 
 
-# ===========================================================================
-# TAB 2: Full chain scanner
-# ===========================================================================
-with tab2:
-    st.header("📋 全链扫描")
+    else:  # long_mode == "全链扫描"
+        st.header("📋 Long 全链扫描")
 
-    if not expiry_dates:
-        st.error("无可用到期日")
-        st.stop()
-
-    scan_expiry = st.selectbox("到期月", expiry_dates, key="tab2_expiry")
-    scan_type = st.radio("期权类型", ["ALL", "CALL", "PUT"], horizontal=True, key="scan_type")
-
-    if st.button("🔍 扫描全链", type="primary", use_container_width=True):
-        all_options = load_full_option_chain(scan_expiry)
-        if scan_type != "ALL":
-            all_options = [o for o in all_options if o["option_type"].upper() == scan_type]
-
-        if not all_options:
-            st.warning(f"无匹配期权 (到期月={scan_expiry}, 类型={scan_type})")
+        if not expiry_dates:
+            st.error("无可用到期日")
             st.stop()
 
-        st.info(f"正在分析 {len(all_options)} 张期权...")
-        progress = st.progress(0)
-        results = []
+        scan_expiry = st.selectbox("到期月", expiry_dates, key="tab2_expiry")
+        scan_type = st.radio("期权类型", ["ALL", "CALL", "PUT"], horizontal=True, key="scan_type")
 
-        for i, opt in enumerate(all_options):
-            rv = score_option(
-                opt, hsi_spot, historical_closes, r, q, mult,
-                weights, float(max_profit_mult),
-            )
-            if rv:
-                results.append(rv)
-            progress.progress((i + 1) / len(all_options))
+        if st.button("🔍 扫描全链", type="primary", use_container_width=True):
+            all_options = load_full_option_chain(scan_expiry)
+            if scan_type != "ALL":
+                all_options = [o for o in all_options if o["option_type"].upper() == scan_type]
 
-        progress.empty()
+            if not all_options:
+                st.warning(f"无匹配期权 (到期月={scan_expiry}, 类型={scan_type})")
+                st.stop()
 
-        if not results:
-            st.error("所有期权计算失败")
-            st.stop()
+            st.info(f"正在分析 {len(all_options)} 张期权...")
+            progress = st.progress(0)
+            results = []
 
-        # Build DataFrame
-        df = pd.DataFrame(results)
-        df = df.sort_values("score", ascending=False)
+            for i, opt in enumerate(all_options):
+                rv = score_option(
+                    opt, hsi_spot, historical_closes, r, q, mult,
+                    weights, float(max_profit_mult),
+                )
+                if rv:
+                    results.append(rv)
+                progress.progress((i + 1) / len(all_options))
 
-        # Summary stats
-        green_count = len(df[df["color"] == "green"])
-        yellow_count = len(df[df["color"] == "yellow"])
-        red_count = len(df[df["color"] == "red"])
+            progress.empty()
 
-        col1, col2, col3, col4 = st.columns(4)
-        with col1: st.metric("分析合约数", len(df))
-        with col2: st.metric("🟢 值博率高 (≥80)", green_count)
-        with col3: st.metric("🟡 一般 (50-79)", yellow_count)
-        with col4: st.metric("🔴 低 (<50)", red_count)
+            if not results:
+                st.error("所有期权计算失败")
+                st.stop()
 
-        st.divider()
+            df = pd.DataFrame(results)
+            df = df.sort_values("score", ascending=False)
+            green_count = len(df[df["color"] == "green"])
+            yellow_count = len(df[df["color"] == "yellow"])
+            red_count = len(df[df["color"] == "red"])
 
-        # Filters
-        filt_col1, filt_col2 = st.columns(2)
-        with filt_col1:
-            min_score = st.slider("最低值博率", 0, 100, 0)
-        with filt_col2:
-            max_spread = st.slider("最大买卖价差 %", 0, 200, 200)
+            col1, col2, col3, col4 = st.columns(4)
+            with col1: st.metric("分析合约数", len(df))
+            with col2: st.metric("🟢 值博率高 (≥80)", green_count)
+            with col3: st.metric("🟡 一般 (50-79)", yellow_count)
+            with col4: st.metric("🔴 低 (<50)", red_count)
 
-        df_filtered = df[(df["score"] >= min_score) & (df["spread_pct"] <= max_spread)]
+            st.divider()
 
-        # Color-coded dataframe
-        def color_row(row):
-            color = row.get("color", "yellow")
-            if color == "green":
-                return ["background-color: #e8f5e9"] * len(row)
-            elif color == "red":
-                return ["background-color: #ffebee"] * len(row)
-            return [""] * len(row)
+            filt_col1, filt_col2 = st.columns(2)
+            with filt_col1:
+                min_score = st.slider("最低值博率", 0, 100, 0)
+            with filt_col2:
+                max_spread = st.slider("最大买卖价差 %", 0, 200, 200)
 
-        display_cols = {
-            "strike": "行权价",
-            "type": "类型",
-            "bid": "Bid",
-            "ask": "Ask",
-            "spread_pct": "价差%",
-            "delta": "Delta",
-            "pop": "POP%",
-            "iv_pct": "IV%",
-            "iv_vs_rv": "IV分位",
-            "score": "值博率",
-            "volume": "成交量",
-            "open_interest": "OI",
-            "cost_hkd": "买入成本",
-        }
-        df_display = df_filtered[list(display_cols.keys())].rename(columns=display_cols)
-        df_display = df_display.round({
-            "Bid": 0, "Ask": 0, "价差%": 1, "Delta": 3, "POP%": 0,
-            "IV%": 1, "IV分位": 0, "值博率": 0, "买入成本": 0,
-        })
+            df_filtered = df[(df["score"] >= min_score) & (df["spread_pct"] <= max_spread)]
 
-        st.dataframe(
-            df_display,
-            use_container_width=True,
-            height=600,
-            hide_index=True,
-            column_config={
-                "值博率": st.column_config.NumberColumn(format="%d"),
-                "价差%": st.column_config.NumberColumn(format="%.1f%%"),
-                "IV%": st.column_config.NumberColumn(format="%.1f%%"),
-                "Delta": st.column_config.NumberColumn(format="%.3f"),
-                "买入成本": st.column_config.NumberColumn(format="HK$%.0f"),
-            },
-        )
+            display_cols = {
+                "type": "Type", "strike": "Strike", "bid": "Bid", "ask": "Ask",
+                "delta": "Delta", "pop": "Prob.ITM", "iv_pct": "IV",
+                "iv_vs_rv": "IV分位", "spread_pct": "Spread",
+                "volume": "Volume", "open_interest": "Open Interest",
+                "cost_hkd": "成本(HKD)", "score": "值博率",
+            }
+            df_display = df_filtered[list(display_cols.keys())].rename(columns=display_cols)
+            df_display = df_display.round({
+                "Bid": 0, "Ask": 0, "Delta": 3, "Prob.ITM": 0,
+                "IV": 1, "IV分位": 0, "Spread": 1, "成本(HKD)": 0, "值博率": 0,
+            })
 
-        st.caption(f"显示 {len(df_filtered)} / {len(df)} 张合约（最低值博率 {min_score}，最大价差 {max_spread}%）")
+            st.dataframe(df_display, use_container_width=True, height=600, hide_index=True,
+                column_config={
+                    "值博率": st.column_config.NumberColumn(format="%d"),
+                    "Spread": st.column_config.NumberColumn(format="%.0f%%"),
+                    "IV": st.column_config.NumberColumn(format="%.1f%%"),
+                    "Prob.ITM": st.column_config.NumberColumn(format="%.0f%%"),
+                    "Delta": st.column_config.NumberColumn(format="%.3f"),
+                    "成本(HKD)": st.column_config.NumberColumn(format="HK$%.0f"),
+                })
 
-        # Best pick highlight
-        if green_count > 0:
-            best = df[df["color"] == "green"].iloc[0]
-            st.success(
-                f"🏆 最高值博率: {best['type']} {best['strike']:.0f} "
-                f"→ 评分 {best['score']:.0f}/100 | IV {best['iv_pct']:.1f}% | "
-                f"价差 {best['spread_pct']:.1f}% | 成本 HK${best['cost_hkd']:,.0f}"
-            )
-        elif yellow_count > 0:
-            best = df.iloc[0]
-            st.info(
-                f"📊 最优选择: {best['type']} {best['strike']:.0f} "
-                f"→ 评分 {best['score']:.0f}/100 (无绿色合约)"
-            )
+            st.caption(f"显示 {len(df_filtered)} / {len(df)} 张合约（最低值博率 {min_score}，最大价差 {max_spread}%）")
+
+            if green_count > 0:
+                best = df[df["color"] == "green"].iloc[0]
+                st.success(f"🏆 最高值博率: {best['type']} {best['strike']:.0f} → 评分 {best['score']:.0f}/100 | IV {best['iv_pct']:.1f}% | 价差 {best['spread_pct']:.1f}% | 成本 HK${best['cost_hkd']:,.0f}")
+            elif yellow_count > 0:
+                best = df.iloc[0]
+                st.info(f"📊 最优选择: {best['type']} {best['strike']:.0f} → 评分 {best['score']:.0f}/100 (无绿色合约)")
 
 
 # ===========================================================================
-# TAB 3: Trade Log + Weight Calibration
+# TAB: Short 分析
+# ===========================================================================
+with tab_short:
+    from short_scoring import calculate_short_composite, ShortScoreWeights as ShortW
+
+    short_mode = st.radio("模式", ["单合约评估", "全链扫描"], horizontal=True, key="short_mode")
+
+    if short_mode == "单合约":
+        st.header("选择期权合约 (Short)")
+
+        if not expiry_dates:
+            st.error("无可用到期日")
+            st.stop()
+
+        c1, c2 = st.columns(2)
+        with c1:
+            s_ot = st.radio("期权类型", ["CALL", "PUT"], horizontal=True, key="short_ot")
+        with c2:
+            s_exp = st.selectbox("到期月", expiry_dates, key="short_exp")
+
+        s_opts = load_full_option_chain(s_exp)
+        s_filtered = [o for o in s_opts if o["option_type"].upper() == s_ot]
+        if not s_filtered:
+            st.warning(f"{s_exp} 无 {s_ot} 期权")
+            st.stop()
+
+        s_strikes = sorted(set(o["strike_price"] for o in s_filtered))
+        ca, cb = st.columns(2)
+        with ca:
+            s_strike = st.selectbox("行权价", s_strikes, key="short_strike")
+        with cb:
+            s_sel = next((o for o in s_filtered if o["strike_price"] == s_strike), None)
+            if s_sel:
+                s_prem = s_sel["last_price"]
+                s_bid = s_sel["bid_price"] if s_sel["bid_price"] > 0 else s_prem * 0.95
+                s_ask = s_sel["ask_price"] if s_sel["ask_price"] > 0 else s_prem * 1.05
+                s_premium = st.number_input("权利金（市价）", value=s_prem, step=1.0, key="short_prem")
+                st.caption(f"Bid: {s_bid:.1f} | Ask: {s_ask:.1f} | Vol: {s_sel['volume']} | OI: {s_sel.get('open_interest', 0)}")
+
+        if st.button("🔍 评估 Short 值博率", type="primary", use_container_width=True, key="short_btn"):
+            try:
+                s_expiry_dt = datetime.strptime(s_exp, '%Y-%m-%d').date()
+            except ValueError:
+                st.error("到期日格式错误"); st.stop()
+
+            with st.spinner("Short 计算中..."):
+                s_rv = score_option(s_sel, hsi_spot, historical_closes, r, q, mult, weights, float(max_profit_mult))
+
+            if s_rv is None:
+                st.error("计算失败——数据可能不完整")
+                st.stop()
+
+            # Use Short scoring instead of Long
+            s_w = ShortW()
+            short_result = calculate_short_composite(
+                iv_percentile=s_rv["iv_vs_rv"], theta=s_rv["theta"],
+                premium=s_premium, option_type=s_ot, strike=s_strike,
+                spot=hsi_spot, delta=s_rv["delta"], vega=s_rv["vega"],
+                bid=s_bid, ask=s_ask, days_to_expiry=s_rv.get("days_to_expiry", 30),
+                open_interest=s_sel.get("open_interest", 0),
+                contract_multiplier=mult,
+            )
+
+            st.divider()
+            color_map = {"green": "#00C853", "yellow": "#FFD600", "red": "#FF1744"}
+            sc1, sc2 = st.columns([1, 2])
+            with sc1:
+                st.markdown(f"""
+                <div style="text-align:center; padding:20px; border:3px solid {color_map.get(short_result.color, '#999')}; border-radius:16px;">
+                    <div style="font-size:4em; font-weight:bold; color:{color_map.get(short_result.color, '#999')};">{short_result.composite:.0f}</div>
+                    <div style="color:#888;">Short 值博率 / 100</div>
+                </div>""", unsafe_allow_html=True)
+            with sc2:
+                st.markdown(f"### {short_result.recommendation}")
+                st.markdown(f"保证金估算: **HK${short_result.margin_estimate:,.0f}** | 年化 ROC: **{short_result.roc_pct:.1f}%**")
+                st.markdown(f"IV: {s_rv['iv_pct']:.1f}% | Delta: {s_rv['delta']:.3f} | 价差: {s_rv['spread_pct']:.1f}%")
+
+            st.subheader("📊 Short 值博率分解")
+            sd = short_result.to_dict()
+            scols = st.columns(6)
+            for i, (lbl, k) in enumerate([("IV(Short)", "iv_score"), ("Theta(Short)", "theta_score"),
+                   ("RR(Short)", "rr_score"), ("Delta(Short)", "delta_score"),
+                   ("Vega(Short)", "vega_score"), ("Liquidity", "liquidity_score")]):
+                with scols[i]:
+                    v = sd[k]
+                    clr = "#00C853" if v >= 80 else ("#FFD600" if v >= 50 else "#FF1744")
+                    st.markdown(f"**{lbl}**")
+                    st.markdown(f"<span style='color:{clr};font-size:1.3em;font-weight:bold;'>{v:.0f}</span>", unsafe_allow_html=True)
+
+            if s_rv["spread_pct"] > 10:
+                st.warning(f"⚠️ 买卖价差 {s_rv['spread_pct']:.1f}%——流动性差，Short 后可能难以平仓")
+            if abs(s_rv["delta"]) > 0.7:
+                st.warning(f"⚠️ Delta {s_rv['delta']:.3f} 偏高——方向风险大。裸卖空应选 Delta < 0.3 的合约")
+            if short_result.roc_pct < 10:
+                st.info(f"💡 年化 ROC {short_result.roc_pct:.1f}%——考虑是否需要占用保证金来做这笔交易")
+
+            st.caption("Short 专属提醒：裸卖空亏损可能超过保证金。Call 理论上无限亏损。本工具只做分析，不做交易建议。")
+
+    else:  # short_mode == "全链扫描"
+        st.header("📋 Short 全链扫描")
+
+        if not expiry_dates:
+            st.error("无可用到期日")
+            st.stop()
+
+        ss_expiry = st.selectbox("到期月", expiry_dates, key="short_scan_expiry")
+        ss_type = st.radio("期权类型", ["ALL", "CALL", "PUT"], horizontal=True, key="short_scan_type")
+
+        if st.button("🔍 扫描 Short 全链", type="primary", use_container_width=True, key="short_scan_btn"):
+            ss_all = load_full_option_chain(ss_expiry)
+            if ss_type != "ALL":
+                ss_all = [o for o in ss_all if o["option_type"].upper() == ss_type]
+
+            if not ss_all:
+                st.warning("无匹配期权")
+                st.stop()
+
+            st.info(f"正在 Short 分析 {len(ss_all)} 张期权...")
+            ss_progress = st.progress(0)
+            ss_results = []
+
+            for i, opt in enumerate(ss_all):
+                rv = score_option(opt, hsi_spot, historical_closes, r, q, mult, weights, float(max_profit_mult))
+                if rv is None:
+                    ss_progress.progress((i + 1) / len(ss_all))
+                    continue
+
+                sw = ShortW()
+                sr = calculate_short_composite(
+                    iv_percentile=rv["iv_vs_rv"], theta=rv["theta"],
+                    premium=rv.get("premium", rv.get("bid", 0)),
+                    option_type=rv["type"], strike=rv["strike"],
+                    spot=hsi_spot, delta=rv["delta"], vega=rv["vega"],
+                    bid=rv["bid"], ask=rv["ask"],
+                    days_to_expiry=rv.get("days_to_expiry", 30),
+                    open_interest=rv.get("open_interest", 0),
+                    contract_multiplier=mult,
+                )
+                ss_results.append({
+                    "type": rv["type"], "strike": rv["strike"],
+                    "bid": rv["bid"], "ask": rv["ask"],
+                    "delta": rv["delta"], "iv_pct": rv["iv_pct"],
+                    "iv_vs_rv": rv["iv_vs_rv"],
+                    "spread_pct": rv["spread_pct"],
+                    "volume": rv["volume"],
+                    "open_interest": rv.get("open_interest", 0),
+                    "cost_hkd": rv["cost_hkd"],
+                    "score": sr.composite, "color": sr.color,
+                    "margin": sr.margin_estimate, "roc": sr.roc_pct,
+                })
+                ss_progress.progress((i + 1) / len(ss_all))
+
+            ss_progress.empty()
+
+            if not ss_results:
+                st.error("所有期权 Short 计算失败")
+                st.stop()
+
+            # DataFrame + display (same structure as Long scanner)
+            ss_df = pd.DataFrame(ss_results).sort_values("score", ascending=False)
+            sg = len(ss_df[ss_df["color"] == "green"])
+            sy = len(ss_df[ss_df["color"] == "yellow"])
+            sr_count = len(ss_df[ss_df["color"] == "red"])
+
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: st.metric("分析合约数", len(ss_df))
+            with c2: st.metric("🟢 值得Short", sg)
+            with c3: st.metric("🟡 一般", sy)
+            with c4: st.metric("🔴 不建议", sr_count)
+
+            st.divider()
+
+            ss_display_cols = {
+                "type": "Type", "strike": "Strike", "bid": "Bid", "ask": "Ask",
+                "delta": "Delta", "iv_pct": "IV", "iv_vs_rv": "IV分位",
+                "spread_pct": "Spread", "volume": "Volume",
+                "open_interest": "Open Interest", "margin": "保证金",
+                "roc": "ROC%", "score": "值博率",
+            }
+            ss_show = ss_df[list(ss_display_cols.keys())].rename(columns=ss_display_cols)
+            ss_show = ss_show.round({
+                "Bid": 0, "Ask": 0, "Delta": 3, "IV": 1, "IV分位": 0,
+                "Spread": 1, "保证金": 0, "ROC%": 1, "值博率": 0,
+            })
+
+            st.dataframe(ss_show, use_container_width=True, height=600, hide_index=True,
+                column_config={
+                    "值博率": st.column_config.NumberColumn(format="%d"),
+                    "ROC%": st.column_config.NumberColumn(format="%.1f%%"),
+                    "Spread": st.column_config.NumberColumn(format="%.0f%%"),
+                    "IV": st.column_config.NumberColumn(format="%.1f%%"),
+                    "Delta": st.column_config.NumberColumn(format="%.3f"),
+                    "保证金": st.column_config.NumberColumn(format="HK$%.0f"),
+                })
+
+            if sg > 0:
+                best_s = ss_df[ss_df["color"] == "green"].iloc[0]
+                st.success(f"🏆 最佳 Short: {best_s['type']} {best_s['strike']:.0f} → Short评分 {best_s['score']:.0f} | ROC {best_s['roc']:.1f}% | 保证金 HK${best_s['margin']:,.0f}")
+
+
+# ===========================================================================
+# TAB: 交易日志
 # ===========================================================================
 TRADE_LOG_FILE = os.path.join(os.path.dirname(__file__), "trade_log.csv")
 
@@ -479,7 +647,7 @@ def load_trade_log() -> pd.DataFrame:
 def save_trade_log(df: pd.DataFrame):
     df.to_csv(TRADE_LOG_FILE, index=False)
 
-with tab3:
+with tab_log:
     st.header("📝 交易日志")
 
     trade_df = load_trade_log()
